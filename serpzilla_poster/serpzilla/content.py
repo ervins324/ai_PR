@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Optional
 from serpzilla_poster.serpzilla.client import SerpzillaClient
 
@@ -25,7 +26,7 @@ async def upload_media(client: SerpzillaClient, project_id: int, image_bytes: by
     }
 
     logger.info(f"Uploading media ({len(image_bytes)} bytes) to {path}")
-    res = await client.post(path, files=files)
+    res = await asyncio.to_thread(client.post, path, files=files)
     
     # Parse returned media URL or ID from response structure
     media_url = res.get("url") or res.get("mediaUrl") or res.get("contentId") or res.get("id")
@@ -64,7 +65,7 @@ async def upload_article(
     }
 
     logger.info(f"Uploading article '{title}' to {path}")
-    res = await client.post(path, json=payload)
+    res = await asyncio.to_thread(client.post, path, json=payload)
 
     # Extract created articleId from response JSON
     article_id = res.get("articleId") or res.get("id") or res.get("article_id")

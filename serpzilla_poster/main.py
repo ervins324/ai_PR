@@ -1,5 +1,7 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+
 from typing import List, Optional
 from pathlib import Path
 
@@ -70,7 +72,8 @@ async def execute_guest_post_pipeline(task_id: int):
             # Step 2: Authenticate & Upload media + article to Serpzilla
             logger.info(f"[Task #{task_id}] Step 2: Uploading media & article to Serpzilla...")
             client = SerpzillaClient()
-            await client.authenticate()
+            await asyncio.to_thread(client.authenticate)
+
 
             # Upload media file
             hosted_media_url = await upload_media(
