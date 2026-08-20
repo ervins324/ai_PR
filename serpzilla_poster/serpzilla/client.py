@@ -51,8 +51,13 @@ class SerpzillaClient:
 
         try:
             login_resp = self.session.post(login_url, json=login_payload, timeout=15.0)
+            if login_resp.status_code in (401, 403):
+                logger.error(f"Step 1 auth failed with HTTP {login_resp.status_code}: {login_resp.text}")
+                raise SerpzillaAPIError("Invalid credentials or missing AUTH_TICKET cookie.")
             login_resp.raise_for_status()
         except requests.RequestException as exc:
+            if isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code in (401, 403):
+                raise SerpzillaAPIError("Invalid credentials or missing AUTH_TICKET cookie.") from exc
             raise SerpzillaAPIError(f"Step 1 authentication failed at {login_url}: {exc}") from exc
 
         auth_ticket = login_resp.cookies.get("AUTH_TICKET")
@@ -74,9 +79,10 @@ class SerpzillaClient:
             auth_ticket = login_resp.text.strip()
 
         if not auth_ticket:
-            raise SerpzillaAPIError("Step 1 failed: AUTH_TICKET cookie could not be retrieved from login response.")
+            raise SerpzillaAPIError("Invalid credentials or missing AUTH_TICKET cookie.")
 
         self.auth_ticket = auth_ticket
+        self.session.cookies.set("AUTH_TICKET", self.auth_ticket)
         logger.info("Step 1 complete: AUTH_TICKET cookie obtained successfully.")
 
         # Step 2: Request auth endpoint passing AUTH_TICKET cookie to extract JWT
@@ -87,8 +93,13 @@ class SerpzillaClient:
 
         try:
             auth_resp = self.session.get(auth_url, headers=auth_headers, timeout=15.0)
+            if auth_resp.status_code in (401, 403):
+                logger.error(f"Step 2 auth failed with HTTP {auth_resp.status_code}: {auth_resp.text}")
+                raise SerpzillaAPIError("Invalid credentials or missing AUTH_TICKET cookie.")
             auth_resp.raise_for_status()
         except requests.RequestException as exc:
+            if isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code in (401, 403):
+                raise SerpzillaAPIError("Invalid credentials or missing AUTH_TICKET cookie.") from exc
             raise SerpzillaAPIError(f"Step 2 authentication failed at {auth_url}: {exc}") from exc
 
         jwt_token = None
@@ -110,23 +121,24 @@ class SerpzillaClient:
             jwt_token = auth_resp.text.strip()
 
         if not jwt_token:
-            raise SerpzillaAPIError("Step 2 failed: JWT token string could not be extracted from auth response.")
+            raise SerpzillaAPIError("Invalid credentials or missing AUTH_TICKET cookie.")
 
         self.jwt_token = jwt_token
         logger.info("Step 2 complete: JWT token extracted successfully.")
 
-        # Step 3: Attach persistent headers to self.session
+        # Step 3: Attach persistent headers and cookie to self.session
         self.session.headers.update({
             "Authorization": f"Bearer {self.jwt_token}",
             "Cookie": f"AUTH_TICKET={self.auth_ticket}"
         })
-        logger.info("Step 3 complete: Persistent session headers configured.")
+        self.session.cookies.set("AUTH_TICKET", self.auth_ticket)
+        logger.info("Step 3 complete: Persistent session headers and cookies configured.")
 
     def request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Execute an authenticated HTTP request using the persistent session.
 
         Automatically prepends base_url, handles JSON response parsing, and
-        raises structured exceptions. Automatically re-authenticates on 401.
+        raises structured exceptions. Automatically re-authenticates on 401/403.
         """
         if not self.auth_ticket or not self.jwt_token:
             self.authenticate()
@@ -142,18 +154,25 @@ class SerpzillaClient:
         except requests.RequestException as exc:
             raise SerpzillaAPIError(f"Network error during {method.upper()} {url}: {exc}") from exc
 
-        # Automatic re-authentication on 401 Unauthorized
-        if response.status_code == 401:
-            logger.info("Received 401 Unauthorized response. Attempting re-authentication...")
-            self.authenticate()
+        # Automatic re-authentication on 401 or 403 status codes
+        if response.status_code in (401, 403):
+            logger.info(f"Received HTTP {response.status_code} response. Attempting automatic re-authentication...")
             try:
+                self.authenticate()
                 response = self.session.request(method=method, url=url, **kwargs)
+            except SerpzillaAPIError:
+                raise
             except requests.RequestException as exc:
                 raise SerpzillaAPIError(f"Network error after re-authentication during {method.upper()} {url}: {exc}") from exc
+
+            if response.status_code in (401, 403):
+                logger.error(f"Request failed with HTTP {response.status_code} after re-authentication. Response: {response.text}")
+                raise SerpzillaAPIError("Invalid credentials or missing AUTH_TICKET cookie.")
 
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
+            logger.error(f"Serpzilla API HTTP {response.status_code} at {url}. Body: {response.text}")
             raise SerpzillaAPIError(f"Serpzilla API HTTP {response.status_code} error at {url}: {response.text}") from exc
 
         try:
@@ -183,9 +202,53 @@ class SerpzillaClient:
         return self.get("/rest/User/info")
 
     def get_projects(self) -> Dict[str, Any]:
-        """Call GET /rest/Project/briefList to retrieve active user projects."""
+        """Fetch active user projects using GET /rest/Project/briefList with fallback to GET /rest/Project.
+
+        Logs raw status code and response body if status is non-200 or project list is empty.
+        Raises SerpzillaAPIError if 0 projects are found.
+        """
         logger.info("Fetching active user projects list.")
-        return self.get("/rest/Project/briefList")
+
+        res_data = None
+        projects_list = []
+
+        # Primary attempt: /rest/Project/briefList
+        try:
+            res_data = self.get("/rest/Project/briefList")
+            if isinstance(res_data, dict):
+                projects_list = res_data.get("projects") or res_data.get("list") or []
+            elif isinstance(res_data, list):
+                projects_list = res_data
+        except SerpzillaAPIError as exc:
+            logger.warning(f"GET /rest/Project/briefList failed: {exc}. Trying fallback /rest/Project...")
+        except Exception as exc:
+            logger.warning(f"Unexpected error calling /rest/Project/briefList: {exc}")
+
+        # Fallback attempt: /rest/Project
+        if not projects_list:
+            logger.info("Primary project endpoint returned empty or failed. Trying fallback /rest/Project...")
+            try:
+                fallback_data = self.get("/rest/Project")
+                if isinstance(fallback_data, dict):
+                    projects_list = fallback_data.get("projects") or fallback_data.get("list") or []
+                    if not projects_list and isinstance(fallback_data.get("data"), list):
+                        projects_list = fallback_data.get("data")
+                    res_data = fallback_data
+                elif isinstance(fallback_data, list):
+                    projects_list = fallback_data
+                    res_data = fallback_data
+            except SerpzillaAPIError as exc:
+                logger.error(f"Fallback GET /rest/Project failed: {exc}")
+                raise
+
+        # Check for empty projects list and raise diagnostic exception
+        if not projects_list:
+            logger.warning(f"Serpzilla projects response status or body returned 0 projects. Raw response: {res_data}")
+            raise SerpzillaAPIError("Authentication succeeded, but 0 active projects found in your Serpzilla account.")
+
+        if isinstance(res_data, dict):
+            return res_data
+        return {"projects": projects_list}
 
     def lookup_site_by_domain(self, domain: str) -> Dict[str, Any]:
         """Call GET /rest/Search/siteIdByName?name={domain} to retrieve matching siteId."""
@@ -196,4 +259,3 @@ class SerpzillaClient:
         """Call POST /rest/SearchPermanent/projectId/{project_id} to fetch candidate guest post sites."""
         logger.info(f"Searching candidate guest post publisher sites for project {project_id}.")
         return self.post(f"/rest/SearchPermanent/projectId/{project_id}", json={})
-

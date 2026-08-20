@@ -15,7 +15,8 @@ from serpzilla_poster.config import get_settings
 from serpzilla_poster.database import init_db, get_session, Task, TaskStatus, async_session_maker
 from serpzilla_poster.ai.generator import generate_article
 from serpzilla_poster.ai.image_scraper import scrape_image_for_article
-from serpzilla_poster.serpzilla.client import SerpzillaClient
+from serpzilla_poster.serpzilla.client import SerpzillaClient, SerpzillaAPIError
+
 from serpzilla_poster.serpzilla.content import upload_media, upload_article
 from serpzilla_poster.serpzilla.placement import create_guest_post_placement
 
@@ -189,6 +190,9 @@ async def get_projects():
                         "name": item.get("name") or item.get("title") or f"Project {item.get('id')}"
                     })
         return {"projects": projects, "raw": data}
+    except SerpzillaAPIError as exc:
+        logger.warning(f"Serpzilla API error in get_projects: {exc}")
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("Failed to fetch projects from Serpzilla API")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -211,6 +215,9 @@ async def lookup_site_id(domain: str):
             site_id = int(res)
 
         return {"domain": clean_domain, "site_id": site_id, "raw": res}
+    except SerpzillaAPIError as exc:
+        logger.warning(f"Serpzilla API error in lookup_site_id: {exc}")
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception(f"Failed to lookup site ID for domain {domain}")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -223,7 +230,11 @@ async def search_sites(project_id: int):
     try:
         data = await asyncio.to_thread(client.search_sites, project_id)
         return {"project_id": project_id, "data": data}
+    except SerpzillaAPIError as exc:
+        logger.warning(f"Serpzilla API error in search_sites: {exc}")
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception(f"Failed to search sites for project {project_id}")
         raise HTTPException(status_code=500, detail=str(exc))
+
 
