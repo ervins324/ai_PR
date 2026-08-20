@@ -171,3 +171,59 @@ async def list_tasks(session: AsyncSession = Depends(get_session)):
     result = await session.execute(statement)
     tasks = result.scalars().all()
     return tasks
+
+
+@app.get("/api/projects")
+async def get_projects():
+    """Fetch and return list of active user projects from Serpzilla API."""
+    client = SerpzillaClient()
+    try:
+        data = await asyncio.to_thread(client.get_projects)
+        projects = []
+        raw_list = data.get("projects") or data.get("list") or (data if isinstance(data, list) else [])
+        if isinstance(raw_list, list):
+            for item in raw_list:
+                if isinstance(item, dict):
+                    projects.append({
+                        "id": item.get("id") or item.get("projectId"),
+                        "name": item.get("name") or item.get("title") or f"Project {item.get('id')}"
+                    })
+        return {"projects": projects, "raw": data}
+    except Exception as exc:
+        logger.exception("Failed to fetch projects from Serpzilla API")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/sites/lookup")
+async def lookup_site_id(domain: str):
+    """Lookup siteId by domain name from Serpzilla API."""
+    if not domain or not domain.strip():
+        raise HTTPException(status_code=400, detail="Domain parameter is required")
+
+    clean_domain = domain.strip().replace("https://", "").replace("http://", "").split("/")[0]
+    client = SerpzillaClient()
+    try:
+        res = await asyncio.to_thread(client.lookup_site_by_domain, clean_domain)
+        site_id = None
+        if isinstance(res, dict):
+            site_id = res.get("siteId") or res.get("id") or res.get("site_id")
+        elif isinstance(res, (int, str)) and str(res).isdigit():
+            site_id = int(res)
+
+        return {"domain": clean_domain, "site_id": site_id, "raw": res}
+    except Exception as exc:
+        logger.exception(f"Failed to lookup site ID for domain {domain}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/sites/search")
+async def search_sites(project_id: int):
+    """Fetch available candidate publisher sites for a project from Serpzilla API."""
+    client = SerpzillaClient()
+    try:
+        data = await asyncio.to_thread(client.search_sites, project_id)
+        return {"project_id": project_id, "data": data}
+    except Exception as exc:
+        logger.exception(f"Failed to search sites for project {project_id}")
+        raise HTTPException(status_code=500, detail=str(exc))
+

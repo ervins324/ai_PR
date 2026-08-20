@@ -27,14 +27,46 @@
                     New Guest Post Task
                 </h2>
                 <form id="task-form" class="space-y-4">
+                    <!-- Project ID Selection -->
                     <div>
-                        <label class="block text-xs font-medium text-gray-300 uppercase tracking-wider mb-1">Project ID</label>
-                        <input type="number" name="project_id" required placeholder="e.g. 102938" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 text-white">
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="block text-xs font-medium text-gray-300 uppercase tracking-wider">Project ID</label>
+                            <button type="button" onclick="loadProjects()" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1">
+                                ↻ Load Projects
+                            </button>
+                        </div>
+                        <div class="space-y-2">
+                            <input type="number" id="project_id_input" name="project_id" required placeholder="e.g. 102938" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 text-white">
+                            <select id="project_select" onchange="selectProject(this.value)" class="hidden w-full bg-gray-900 border border-indigo-700 rounded-lg px-3 py-2 text-xs text-indigo-300 focus:outline-none focus:border-indigo-500">
+                                <option value="">Select an active project...</option>
+                            </select>
+                        </div>
+                        <div id="project-msg" class="text-xs text-gray-400 mt-1 hidden"></div>
                     </div>
+
+                    <!-- Site ID Lookup -->
                     <div>
-                        <label class="block text-xs font-medium text-gray-300 uppercase tracking-wider mb-1">Site ID</label>
-                        <input type="number" name="site_id" required placeholder="e.g. 54321" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 text-white">
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="block text-xs font-medium text-gray-300 uppercase tracking-wider">Site ID</label>
+                            <button type="button" onclick="toggleSiteLookup()" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                                🔍 Lookup Site ID
+                            </button>
+                        </div>
+                        <input type="number" id="site_id_input" name="site_id" required placeholder="e.g. 54321" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 text-white mb-2">
+                        
+                        <!-- Inline Domain Search Box -->
+                        <div id="site-lookup-box" class="hidden bg-gray-900/90 p-3 rounded-lg border border-indigo-900/60 space-y-2">
+                            <div class="text-xs text-gray-300 font-medium">Domain Site ID Lookup</div>
+                            <div class="flex gap-2">
+                                <input type="text" id="lookup_domain_input" placeholder="e.g. techcrunch.com" class="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+                                <button type="button" id="lookup-btn" onclick="performSiteLookup()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded text-xs transition-colors whitespace-nowrap">
+                                    Search
+                                </button>
+                            </div>
+                            <div id="lookup-msg" class="text-xs"></div>
+                        </div>
                     </div>
+
                     <div>
                         <label class="block text-xs font-medium text-gray-300 uppercase tracking-wider mb-1">Target URL</label>
                         <input type="url" name="target_url" required placeholder="https://example.com/target-page" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 text-white">
@@ -88,6 +120,79 @@
             'placed': 'bg-emerald-950 text-emerald-400 border-emerald-800',
             'failed': 'bg-rose-950 text-rose-400 border-rose-800'
         };
+
+        async function loadProjects() {
+            const msg = document.getElementById('project-msg');
+            const select = document.getElementById('project_select');
+            msg.className = 'text-xs text-indigo-400 mt-1 block';
+            msg.textContent = 'Fetching projects from Serpzilla...';
+            
+            try {
+                const res = await fetch('/api/projects');
+                const data = await res.json();
+                if (res.ok && data.projects && data.projects.length > 0) {
+                    select.innerHTML = '<option value="">Select an active project...</option>' +
+                        data.projects.map(p => `<option value="${p.id}">${p.name} (#${p.id})</option>`).join('');
+                    select.classList.remove('hidden');
+                    msg.className = 'text-xs text-emerald-400 mt-1 block';
+                    msg.textContent = `Loaded ${data.projects.length} projects successfully.`;
+                } else {
+                    msg.className = 'text-xs text-rose-400 mt-1 block';
+                    msg.textContent = data.detail || 'No projects returned or credentials invalid.';
+                }
+            } catch (err) {
+                msg.className = 'text-xs text-rose-400 mt-1 block';
+                msg.textContent = 'Failed to fetch projects.';
+            }
+        }
+
+        function selectProject(val) {
+            if (val) {
+                document.getElementById('project_id_input').value = val;
+            }
+        }
+
+        function toggleSiteLookup() {
+            const box = document.getElementById('site-lookup-box');
+            box.classList.toggle('hidden');
+        }
+
+        async function performSiteLookup() {
+            const domainInput = document.getElementById('lookup_domain_input');
+            const msg = document.getElementById('lookup-msg');
+            const btn = document.getElementById('lookup-btn');
+            const domain = domainInput.value.trim();
+
+            if (!domain) {
+                msg.className = 'text-xs text-rose-400 block';
+                msg.textContent = 'Please enter a domain name.';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Searching...';
+            msg.className = 'text-xs text-indigo-400 block';
+            msg.textContent = `Looking up ${domain}...`;
+
+            try {
+                const res = await fetch('/api/sites/lookup?domain=' + encodeURIComponent(domain));
+                const data = await res.json();
+                if (res.ok && data.site_id) {
+                    document.getElementById('site_id_input').value = data.site_id;
+                    msg.className = 'text-xs text-emerald-400 block';
+                    msg.textContent = `Found Site ID #${data.site_id} for ${data.domain}! Populated field.`;
+                } else {
+                    msg.className = 'text-xs text-rose-400 block';
+                    msg.textContent = data.detail || `No site ID found for ${domain}.`;
+                }
+            } catch (err) {
+                msg.className = 'text-xs text-rose-400 block';
+                msg.textContent = 'Lookup request failed.';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Search';
+            }
+        }
 
         async function loadTasks() {
             try {

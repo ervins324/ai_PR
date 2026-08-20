@@ -181,3 +181,19 @@ class SerpzillaClient:
         """Call GET /rest/User/info to confirm credentials and return user details."""
         logger.info("Testing connection to Serpzilla user info endpoint.")
         return self.get("/rest/User/info")
+
+    def get_projects(self) -> Dict[str, Any]:
+        """Call GET /rest/Project/briefList to retrieve active user projects."""
+        logger.info("Fetching active user projects list.")
+        return self.get("/rest/Project/briefList")
+
+    def lookup_site_by_domain(self, domain: str) -> Dict[str, Any]:
+        """Call GET /rest/Search/siteIdByName?name={domain} to retrieve matching siteId."""
+        logger.info(f"Looking up siteId for domain: {domain}")
+        return self.get(f"/rest/Search/siteIdByName?name={domain}")
+
+    def search_sites(self, project_id: int) -> Dict[str, Any]:
+        """Call POST /rest/SearchPermanent/projectId/{project_id} to fetch candidate guest post sites."""
+        logger.info(f"Searching candidate guest post publisher sites for project {project_id}.")
+        return self.post(f"/rest/SearchPermanent/projectId/{project_id}", json={})
+
